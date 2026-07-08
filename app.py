@@ -70,17 +70,13 @@ def extract_invoice(text):
     # Invoice number
     # -----------------------------
     invoice_match = re.search(
-    r"(?:Invoice\s*(?:No\.?|Number|ID)?|Invoice\s*#|Inv\.?)\s*[:#\-]?\s*([A-Za-z0-9\-]+)",
+    r"(?:Invoice\s*(?:No\.?|Number|ID)?|Inv\.?)\s*[:#-]?\s*([A-Za-z0-9-]+)",
     text,
-    re.I
+    re.IGNORECASE
 )
 
-    if not invoice_match:
-     invoice_match = re.search(
-        r"\b(?:No|Number)\s*[:#\-]\s*([A-Za-z0-9\-]+)",
-        text,
-        re.I
-    )
+    if invoice_match:
+       result["invoice_no"] = invoice_match.group(1)
 
 
     # -----------------------------
