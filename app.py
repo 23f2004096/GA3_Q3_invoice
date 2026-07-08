@@ -1,15 +1,32 @@
+import os
+import json
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-import re
-from datetime import datetime
+from dotenv import load_dotenv
+import google.generativeai as genai
 
 
-app = FastAPI(title="Invoice Extraction API")
+load_dotenv()
 
 
-# Enable CORS for Cloudflare Worker / grader
+# Configure Gemini
+genai.configure(
+    api_key=os.getenv("GEMINI_API_KEY")
+)
+
+
+model = genai.GenerativeModel(
+    "gemini-2.5-flash"
+)
+
+
+app = FastAPI()
+
+
+# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -19,180 +36,80 @@ app.add_middleware(
 )
 
 
+# Input schema
 class InvoiceRequest(BaseModel):
     invoice_text: str
 
 
 
-def parse_date(date_string):
-    if not date_string:
-        return None
-
-    formats = [
-        "%d %B %Y",
-        "%d %b %Y",
-        "%d %B, %Y",
-        "%d %b, %Y",
-        "%B %d, %Y",
-        "%b %d, %Y",
-        "%Y-%m-%d",
-        "%d/%m/%Y",
-        "%d-%m-%Y"
-    ]
-
-    for fmt in formats:
-        try:
-            return datetime.strptime(
-                date_string.strip(),
-                fmt
-            ).strftime("%Y-%m-%d")
-
-        except ValueError:
-            continue
-
-    return None
+# Output schema
+class InvoiceResponse(BaseModel):
+    invoice_no: str | None
+    date: str | None
+    vendor: str | None
+    amount: float | None
+    tax: float | None
+    currency: str | None
 
 
 
-def extract_invoice(text):
+@app.post("/extract", response_model=InvoiceResponse)
+def extract_invoice(data: InvoiceRequest):
 
-    result = {
-        "invoice_no": None,
-        "date": None,
-        "vendor": None,
-        "amount": None,
-        "tax": None,
-        "currency": "INR"
+    prompt = f"""
+You are an invoice extraction system.
+
+Extract information from this invoice.
+
+Return ONLY valid JSON.
+
+Rules:
+- Always include all six keys.
+- Missing values should be null.
+- Date must be YYYY-MM-DD.
+- amount means subtotal before tax.
+- tax means only tax amount.
+- currency should be INR if rupees are used.
+
+JSON format:
+
+{{
+ "invoice_no": null,
+ "date": null,
+ "vendor": null,
+ "amount": null,
+ "tax": null,
+ "currency": null
+}}
+
+
+Invoice text:
+
+{data.invoice_text}
+"""
+
+
+    response = model.generate_content(
+        prompt,
+        generation_config={
+            "temperature": 0,
+            "response_mime_type": "application/json"
+        }
+    )
+
+
+    result = json.loads(response.text)
+
+
+    # Ensure all keys exist
+    final_result = {
+        "invoice_no": result.get("invoice_no"),
+        "date": result.get("date"),
+        "vendor": result.get("vendor"),
+        "amount": result.get("amount"),
+        "tax": result.get("tax"),
+        "currency": result.get("currency") or "INR"
     }
 
 
-    # -----------------------------
-    # Invoice number
-    # -----------------------------
-    invoice_match = re.search(
-    r"(?:Invoice\s*(?:No\.?|Number|ID)?|Inv\.?)\s*[:#-]?\s*([A-Za-z0-9-]+)",
-    text,
-    re.IGNORECASE
-)
-
-    if invoice_match:
-       result["invoice_no"] = invoice_match.group(1)
-
-
-    # -----------------------------
-    # Date
-    # -----------------------------
-    # date_match = re.search(
-    #     r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
-    #     r"("
-    #     r"\d{1,2}\s+\w+\s+\d{4}|"
-    #     r"\d{1,2}\s+\w+,\s+\d{4}|"
-    #     r"\w+\s+\d{1,2},\s+\d{4}|"
-    #     r"\d{4}-\d{2}-\d{2}|"
-    #     r"\d{1,2}/\d{1,2}/\d{4}|"
-    #     r"\d{1,2}-\d{1,2}-\d{4}"
-    #     r")",
-    #     text,
-    #     re.I
-    # )
-    date_match = re.search(
-    r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
-    r"([0-9]{1,2}\s+\w+\s+[0-9]{4}|"
-    r"[0-9]{4}-[0-9]{2}-[0-9]{2}|"
-    r"[0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
-    text,
-    re.I
-)
-
-    if date_match:
-        result["date"] = parse_date(
-            date_match.group(1)
-        )
-
-
-
-    # -----------------------------
-    # Vendor
-    # -----------------------------
-     # -----------------------------
-# Vendor
-# -----------------------------
-#     vendor_match = re.search(
-#     r"(?:Vendor|Supplier|Seller|Company|From|vendor)\s*[:\-]?\s*([A-Za-z0-9 &.,'-]+)",
-#     text,
-#     re.I
-# )
-
-#     if vendor_match:
-#        result["vendor"] = vendor_match.group(1).strip()
-
-    vendor_match = re.search(
-    r"(?:Vendor|Supplier|Seller|Company|From)"
-    r"\s*[:\-]?\s*"
-    r"(.*?)(?=\s+(?:Subtotal|Sub Total|Amount|GST|Tax|VAT|TOTAL|Total|Grand|$))",
-    text,
-    re.I
-)
-
-    if vendor_match:
-      result["vendor"] = vendor_match.group(1).strip()
-
-
-
-   
-    # -----------------------------
-# Amount / subtotal
-# -----------------------------
-    amount_match = re.search(
-    r"(?:Subtotal|Sub Total|Amount|Net Amount|Total Before Tax|amount|subtotal)"
-    r"\s*[:\-]?\s*"
-    r"(?:Rs\.?|INR|₹)?\s*"
-    r"([\d,]+(?:\.\d+)?)",
-    text,
-    re.I
-)
-
-    if amount_match:
-      result["amount"] = float(
-        amount_match.group(1).replace(",", "")
-    )
-
-
-
-    # -----------------------------
-    # Tax / GST
-    # -----------------------------
-    tax_match = re.search(
-        r"(?:GST|Tax|VAT)"
-        r"(?:\s*\(\s*\d+\s*%\s*\))?"
-        r"\s*[:\-]?\s*"
-        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        text,
-        re.I
-    )
-
-    if tax_match:
-        result["tax"] = float(
-            tax_match.group(1).replace(",", "")
-        )
-
-
-    return result
-
-
-
-@app.post("/extract")
-def extract_invoice_api(request: InvoiceRequest):
-
-    return extract_invoice(
-        request.invoice_text
-    )
-
-
-
-@app.get("/")
-def home():
-
-    return {
-        "message": "Invoice Extraction API running"
-    }
+    return final_result
