@@ -19,7 +19,7 @@ app.add_middleware(
 )
 
 
-# Request body format
+# Request schema
 class InvoiceRequest(BaseModel):
     invoice_text: str
 
@@ -30,7 +30,12 @@ def parse_date(date_string):
     formats = [
         "%d %B %Y",
         "%d %b %Y",
-        "%Y-%m-%d"
+        "%d %B, %Y",
+        "%d %b, %Y",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%Y-%m-%d",
+        "%d/%m/%Y"
     ]
 
     for fmt in formats:
@@ -39,8 +44,9 @@ def parse_date(date_string):
                 date_string.strip(),
                 fmt
             ).strftime("%Y-%m-%d")
-        except:
-            pass
+
+        except ValueError:
+            continue
 
     return None
 
@@ -58,35 +64,47 @@ def extract_invoice(text):
     }
 
 
-    # Invoice number
+    # -------------------------
+    # Invoice Number
+    # -------------------------
     invoice_match = re.search(
-    r"(?:Invoice\s*(?:No|Number)?|Inv)\s*[:#]?\s*([A-Z0-9\-]+)",
-    text,
-    re.I
-)
+        r"(?:Invoice\s*(?:No|Number|ID)?|Inv)\s*[:#\-]?\s*([A-Z0-9\-]+)",
+        text,
+        re.I
+    )
 
     if invoice_match:
-      result["invoice_no"] = invoice_match.group(1)
+        result["invoice_no"] = invoice_match.group(1)
 
 
 
+    # -------------------------
     # Date
+    # -------------------------
     date_match = re.search(
-        r"(Date)\s*[:\-]?\s*(\d{1,2}\s+\w+\s+\d{4})",
+        r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
+        r"(\d{1,2}\s+\w+\s+\d{4}|"
+        r"\d{1,2}\s+\w+,\s+\d{4}|"
+        r"\w+\s+\d{1,2},\s+\d{4}|"
+        r"\d{4}-\d{2}-\d{2}|"
+        r"\d{1,2}/\d{1,2}/\d{4})",
         text,
         re.I
     )
 
     if date_match:
         result["date"] = parse_date(
-            date_match.group(2)
+            date_match.group(1)
         )
 
 
 
+    # -------------------------
     # Vendor
+    # -------------------------
     vendor_match = re.search(
-        r"Vendor\s*[:\-]?\s*(.+)",
+        r"(?:Vendor|Supplier|Seller)\s*[:\-]?\s*"
+        r"(.*?)(?=\s+(?:Subtotal|Sub Total|Amount|GST|Tax|VAT|TOTAL|Total|$))",
         text,
         re.I
     )
@@ -96,36 +114,40 @@ def extract_invoice(text):
 
 
 
+    # -------------------------
     # Subtotal / Amount
+    # -------------------------
     amount_match = re.search(
-        r"(Subtotal|Sub Total|Amount)\s*[:\-]?\s*(?:Rs\.?|INR)?\s*([\d,]+\.\d{2})",
+        r"(?:Subtotal|Sub Total|Amount)\s*[:\-]?\s*"
+        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         text,
         re.I
     )
-
 
     if amount_match:
-        amount = amount_match.group(2)
         result["amount"] = float(
-            amount.replace(",", "")
+            amount_match.group(1).replace(",", "")
         )
 
 
 
-    # Tax
+    # -------------------------
+    # Tax / GST
+    # -------------------------
     tax_match = re.search(
-        r"(GST|Tax|VAT).*?(?:Rs\.?|INR)?\s*([\d,]+\.\d{2})",
+        r"(?:GST|Tax|VAT)"
+        r"(?:\s*\(\s*\d+%\s*\))?"
+        r"\s*[:\-]?\s*"
+        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
         text,
         re.I
     )
 
-
     if tax_match:
-        tax = tax_match.group(2)
-
         result["tax"] = float(
-            tax.replace(",", "")
+            tax_match.group(1).replace(",", "")
         )
+
 
 
     return result
@@ -133,9 +155,7 @@ def extract_invoice(text):
 
 
 @app.post("/extract")
-def extract_invoice_api(
-    request: InvoiceRequest
-):
+def extract_invoice_api(request: InvoiceRequest):
 
     return extract_invoice(
         request.invoice_text
@@ -145,6 +165,7 @@ def extract_invoice_api(
 
 @app.get("/")
 def home():
+
     return {
         "message": "Invoice Extraction API running"
     }
