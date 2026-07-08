@@ -70,32 +70,43 @@ def extract_invoice(text):
     # Invoice number
     # -----------------------------
     invoice_match = re.search(
-        r"(?:Invoice\s*(?:No\.?|Number|ID)?|Inv\.?)\s*[:#\-]?\s*([A-Za-z0-9\-]+)",
+    r"(?:Invoice\s*(?:No\.?|Number|ID)?|Invoice\s*#|Inv\.?)\s*[:#\-]?\s*([A-Za-z0-9\-]+)",
+    text,
+    re.I
+)
+
+    if not invoice_match:
+     invoice_match = re.search(
+        r"\b(?:No|Number)\s*[:#\-]\s*([A-Za-z0-9\-]+)",
         text,
         re.I
     )
-
-    if invoice_match:
-        result["invoice_no"] = invoice_match.group(1)
-
 
 
     # -----------------------------
     # Date
     # -----------------------------
+    # date_match = re.search(
+    #     r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
+    #     r"("
+    #     r"\d{1,2}\s+\w+\s+\d{4}|"
+    #     r"\d{1,2}\s+\w+,\s+\d{4}|"
+    #     r"\w+\s+\d{1,2},\s+\d{4}|"
+    #     r"\d{4}-\d{2}-\d{2}|"
+    #     r"\d{1,2}/\d{1,2}/\d{4}|"
+    #     r"\d{1,2}-\d{1,2}-\d{4}"
+    #     r")",
+    #     text,
+    #     re.I
+    # )
     date_match = re.search(
-        r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
-        r"("
-        r"\d{1,2}\s+\w+\s+\d{4}|"
-        r"\d{1,2}\s+\w+,\s+\d{4}|"
-        r"\w+\s+\d{1,2},\s+\d{4}|"
-        r"\d{4}-\d{2}-\d{2}|"
-        r"\d{1,2}/\d{1,2}/\d{4}|"
-        r"\d{1,2}-\d{1,2}-\d{4}"
-        r")",
-        text,
-        re.I
-    )
+    r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
+    r"([0-9]{1,2}\s+\w+\s+[0-9]{4}|"
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}|"
+    r"[0-9]{1,2}/[0-9]{1,2}/[0-9]{4})",
+    text,
+    re.I
+)
 
     if date_match:
         result["date"] = parse_date(
