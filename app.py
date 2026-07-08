@@ -114,15 +114,17 @@ def extract_invoice(text):
     # -----------------------------
     # Vendor
     # -----------------------------
+     # -----------------------------
+# Vendor
+# -----------------------------
     vendor_match = re.search(
-        r"(?:Vendor|Supplier|Seller)\s*[:\-]?\s*"
-        r"(.*?)(?=\s+(?:Subtotal|Sub Total|Amount|GST|Tax|VAT|TOTAL|Total|Grand|$))",
-        text,
-        re.I
-    )
+    r"(?:Vendor|Supplier|Seller|Company|From|vendor)\s*[:\-]?\s*([A-Za-z0-9 &.,'-]+)",
+    text,
+    re.I
+)
 
     if vendor_match:
-        result["vendor"] = vendor_match.group(1).strip()
+       result["vendor"] = vendor_match.group(1).strip()
 
 
 
