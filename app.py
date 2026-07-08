@@ -1,15 +1,12 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-
+from typing import Optional
 import re
 from datetime import datetime
 
+app = FastAPI(title="Invoice Extraction API")
 
-app = FastAPI()
-
-
-# Enable CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -18,154 +15,93 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-# Request schema
-class InvoiceRequest(BaseModel):
+class ExtractRequest(BaseModel):
     invoice_text: str
 
+class ExtractResponse(BaseModel):
+    invoice_no: Optional[str] = None
+    date: Optional[str] = None
+    vendor: Optional[str] = None
+    amount: Optional[float] = None
+    tax: Optional[float] = None
+    currency: Optional[str] = None
 
+def extract_field(pattern, text, flags=re.IGNORECASE):
+    match = re.search(pattern, text, flags)
+    if match:
+        return match.group(1).strip()
+    return None
 
-def parse_date(date_string):
+def parse_money(value):
+    if value is None:
+        return None
 
-    formats = [
+    value = value.strip()
+    value = re.sub(r"(?i)\b(?:rs\.?|inr)\b", "", value)
+    value = value.replace(",", "").replace("₹", "").strip()
+
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+def parse_date_to_iso(value):
+    if value is None:
+        return None
+
+    value = value.strip()
+
+    possible_formats = [
         "%d %B %Y",
         "%d %b %Y",
-        "%d %B, %Y",
-        "%d %b, %Y",
-        "%B %d, %Y",
-        "%b %d, %Y",
         "%Y-%m-%d",
-        "%d/%m/%Y"
+        "%d-%m-%Y",
+        "%d/%m/%Y",
+        "%d.%m.%Y",
     ]
 
-    for fmt in formats:
+    for fmt in possible_formats:
         try:
-            return datetime.strptime(
-                date_string.strip(),
-                fmt
-            ).strftime("%Y-%m-%d")
-
+            dt = datetime.strptime(value, fmt)
+            return dt.strftime("%Y-%m-%d")
         except ValueError:
-            continue
+            pass
 
     return None
 
-
-
-def extract_invoice(text):
-
-    result = {
-        "invoice_no": None,
-        "date": None,
-        "vendor": None,
-        "amount": None,
-        "tax": None,
-        "currency": "INR"
-    }
-
-
-    # -------------------------
-    # Invoice Number
-    # -------------------------
-    invoice_match = re.search(
-        r"(?:Invoice\s*(?:No|Number|ID)?|Inv)\s*[:#\-]?\s*([A-Z0-9\-]+)",
-        text,
-        re.I
-    )
-
-    if invoice_match:
-        result["invoice_no"] = invoice_match.group(1)
-
-
-
-    # -------------------------
-    # Date
-    # -------------------------
-    date_match = re.search(
-        r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
-        r"(\d{1,2}\s+\w+\s+\d{4}|"
-        r"\d{1,2}\s+\w+,\s+\d{4}|"
-        r"\w+\s+\d{1,2},\s+\d{4}|"
-        r"\d{4}-\d{2}-\d{2}|"
-        r"\d{1,2}/\d{1,2}/\d{4})",
-        text,
-        re.I
-    )
-
-    if date_match:
-        result["date"] = parse_date(
-            date_match.group(1)
-        )
-
-
-
-    # -------------------------
-    # Vendor
-    # -------------------------
-    vendor_match = re.search(
-        r"(?:Vendor|Supplier|Seller)\s*[:\-]?\s*"
-        r"(.*?)(?=\s+(?:Subtotal|Sub Total|Amount|GST|Tax|VAT|TOTAL|Total|$))",
-        text,
-        re.I
-    )
-
-    if vendor_match:
-        result["vendor"] = vendor_match.group(1).strip()
-
-
-
-    # -------------------------
-    # Subtotal / Amount
-    # -------------------------
-    amount_match = re.search(
-        r"(?:Subtotal|Sub Total|Amount)\s*[:\-]?\s*"
-        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        text,
-        re.I
-    )
-
-    if amount_match:
-        result["amount"] = float(
-            amount_match.group(1).replace(",", "")
-        )
-
-
-
-    # -------------------------
-    # Tax / GST
-    # -------------------------
-    tax_match = re.search(
-        r"(?:GST|Tax|VAT)"
-        r"(?:\s*\(\s*\d+%\s*\))?"
-        r"\s*[:\-]?\s*"
-        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        text,
-        re.I
-    )
-
-    if tax_match:
-        result["tax"] = float(
-            tax_match.group(1).replace(",", "")
-        )
-
-
-
-    return result
-
-
-
-@app.post("/extract")
-def extract_invoice_api(request: InvoiceRequest):
-
-    return extract_invoice(
-        request.invoice_text
-    )
-
-
-
 @app.get("/")
 def home():
+    return {"message": "Invoice Extraction API is running"}
 
-    return {
-        "message": "Invoice Extraction API running"
+@app.post("/extract", response_model=ExtractResponse)
+def extract_invoice(data: ExtractRequest):
+    text = data.invoice_text
+
+    invoice_no = extract_field(r"Invoice\s*No[:\-]?\s*(.+)", text)
+    date_raw = extract_field(r"Date[:\-]?\s*([A-Za-z0-9\/\-. ]+)", text)
+    vendor = extract_field(r"Vendor[:\-]?\s*(.+)", text)
+
+    subtotal_raw = extract_field(
+        r"Subtotal[:\-]?\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
+        text
+    )
+
+    tax_raw = extract_field(
+        r"(?:GST(?:\s*\(\d+%?\))?|Tax)[:\-]?\s*(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d{1,2})?)",
+        text
+    )
+
+    currency = None
+    if re.search(r"(?i)\bINR\b|Rs\.?|₹", text):
+        currency = "INR"
+
+    result = {
+        "invoice_no": invoice_no,
+        "date": parse_date_to_iso(date_raw),
+        "vendor": vendor,
+        "amount": parse_money(subtotal_raw),
+        "tax": parse_money(tax_raw),
+        "currency": currency,
     }
+
+    return result
