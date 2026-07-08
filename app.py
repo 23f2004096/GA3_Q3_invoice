@@ -131,17 +131,22 @@ def extract_invoice(text):
     # -----------------------------
     # Amount / subtotal
     # -----------------------------
+    # -----------------------------
+# Amount / subtotal
+# -----------------------------
     amount_match = re.search(
-        r"(?:Subtotal|Sub Total|Amount)\s*[:\-]?\s*"
-        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
-        text,
-        re.I
-    )
+    r"(?:Subtotal|Sub Total|Amount|Net Amount|Total Before Tax|amount)"
+    r"\s*[:\-]?\s*"
+    r"(?:Rs\.?|INR|₹)?\s*"
+    r"([\d,]+(?:\.\d+)?)",
+    text,
+    re.I
+)
 
     if amount_match:
-        result["amount"] = float(
-            amount_match.group(1).replace(",", "")
-        )
+      result["amount"] = float(
+        amount_match.group(1).replace(",", "")
+    )
 
 
 
