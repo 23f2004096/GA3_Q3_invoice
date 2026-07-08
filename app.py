@@ -1,52 +1,175 @@
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
 import re
 from datetime import datetime
 
-def extract_field(pattern, text, flags=re.IGNORECASE):
-    match = re.search(pattern, text, flags)
-    if match:
-        return match.group(1).strip()
-    return None
 
-def extract_invoice_no(text):
-    patterns = [
-        r"(?im)^\s*Invoice\s*(?:No\.?|Number|#)\s*[:\-]?\s*([A-Z0-9\-\/]+)\s*$",
-        r"(?im)^\s*Bill\s*(?:No\.?|Number|#)\s*[:\-]?\s*([A-Z0-9\-\/]+)\s*$",
-        r"(?im)^\s*Receipt\s*(?:No\.?|Number|#)\s*[:\-]?\s*([A-Z0-9\-\/]+)\s*$",
-        r"(?im)^\s*(?:Invoice|Bill|Receipt)\s*[:\-]?\s*([A-Z0-9\-\/]+)\s*$",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return match.group(1).strip()
-    return None
+app = FastAPI(title="Invoice Extraction API")
 
-def parse_money(value):
-    if value is None:
-        return None
-    value = value.strip()
-    value = re.sub(r"(?i)\b(?:rs\.?|inr)\b", "", value)
-    value = value.replace(",", "").replace("₹", "").strip()
-    try:
-        return float(value)
-    except ValueError:
+
+# Enable CORS for Cloudflare Worker / grader
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+class InvoiceRequest(BaseModel):
+    invoice_text: str
+
+
+
+def parse_date(date_string):
+    if not date_string:
         return None
 
-def parse_date_to_iso(value):
-    if value is None:
-        return None
-    value = value.strip()
-    possible_formats = [
+    formats = [
         "%d %B %Y",
         "%d %b %Y",
+        "%d %B, %Y",
+        "%d %b, %Y",
+        "%B %d, %Y",
+        "%b %d, %Y",
         "%Y-%m-%d",
-        "%d-%m-%Y",
         "%d/%m/%Y",
-        "%d.%m.%Y",
+        "%d-%m-%Y"
     ]
-    for fmt in possible_formats:
+
+    for fmt in formats:
         try:
-            dt = datetime.strptime(value, fmt)
-            return dt.strftime("%Y-%m-%d")
+            return datetime.strptime(
+                date_string.strip(),
+                fmt
+            ).strftime("%Y-%m-%d")
+
         except ValueError:
-            pass
+            continue
+
     return None
+
+
+
+def extract_invoice(text):
+
+    result = {
+        "invoice_no": None,
+        "date": None,
+        "vendor": None,
+        "amount": None,
+        "tax": None,
+        "currency": "INR"
+    }
+
+
+    # -----------------------------
+    # Invoice number
+    # -----------------------------
+    invoice_match = re.search(
+        r"(?:Invoice\s*(?:No\.?|Number|ID)?|Inv\.?)\s*[:#\-]?\s*([A-Za-z0-9\-]+)",
+        text,
+        re.I
+    )
+
+    if invoice_match:
+        result["invoice_no"] = invoice_match.group(1)
+
+
+
+    # -----------------------------
+    # Date
+    # -----------------------------
+    date_match = re.search(
+        r"(?:Invoice\s*Date|Date)\s*[:\-]?\s*"
+        r"("
+        r"\d{1,2}\s+\w+\s+\d{4}|"
+        r"\d{1,2}\s+\w+,\s+\d{4}|"
+        r"\w+\s+\d{1,2},\s+\d{4}|"
+        r"\d{4}-\d{2}-\d{2}|"
+        r"\d{1,2}/\d{1,2}/\d{4}|"
+        r"\d{1,2}-\d{1,2}-\d{4}"
+        r")",
+        text,
+        re.I
+    )
+
+    if date_match:
+        result["date"] = parse_date(
+            date_match.group(1)
+        )
+
+
+
+    # -----------------------------
+    # Vendor
+    # -----------------------------
+    vendor_match = re.search(
+        r"(?:Vendor|Supplier|Seller)\s*[:\-]?\s*"
+        r"(.*?)(?=\s+(?:Subtotal|Sub Total|Amount|GST|Tax|VAT|TOTAL|Total|Grand|$))",
+        text,
+        re.I
+    )
+
+    if vendor_match:
+        result["vendor"] = vendor_match.group(1).strip()
+
+
+
+    # -----------------------------
+    # Amount / subtotal
+    # -----------------------------
+    amount_match = re.search(
+        r"(?:Subtotal|Sub Total|Amount)\s*[:\-]?\s*"
+        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
+        text,
+        re.I
+    )
+
+    if amount_match:
+        result["amount"] = float(
+            amount_match.group(1).replace(",", "")
+        )
+
+
+
+    # -----------------------------
+    # Tax / GST
+    # -----------------------------
+    tax_match = re.search(
+        r"(?:GST|Tax|VAT)"
+        r"(?:\s*\(\s*\d+\s*%\s*\))?"
+        r"\s*[:\-]?\s*"
+        r"(?:Rs\.?|INR|₹)?\s*([\d,]+(?:\.\d+)?)",
+        text,
+        re.I
+    )
+
+    if tax_match:
+        result["tax"] = float(
+            tax_match.group(1).replace(",", "")
+        )
+
+
+    return result
+
+
+
+@app.post("/extract")
+def extract_invoice_api(request: InvoiceRequest):
+
+    return extract_invoice(
+        request.invoice_text
+    )
+
+
+
+@app.get("/")
+def home():
+
+    return {
+        "message": "Invoice Extraction API running"
+    }
